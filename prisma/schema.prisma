@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GroupRole {
+  OWNER
+  MEMBER
+}
+
+enum GroupStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ExpenseStatus {
+  ACTIVE
+  DELETED
+}
+
+enum SplitMethod {
+  EQUAL
+  EXACT
+  PERCENTAGE
+  SHARES
+}
+
+enum SettlementStatus {
+  RECORDED
+  VOIDED
+}
+
+enum AttachmentStatus {
+  PENDING
+  READY
+  FAILED
+  DELETED
+}
+
+enum NotificationType {
+  GROUP_INVITE
+  EXPENSE_CREATED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  SETTLEMENT_RECORDED
+  SETTLEMENT_VOIDED
+  COMMENT_ADDED
+  RECEIPT_ATTACHED
+}
+
+enum ActivityAction {
+  GROUP_CREATED
+  GROUP_UPDATED
+  GROUP_ARCHIVED
+  GROUP_RESTORED
+  MEMBER_JOINED
+  MEMBER_REMOVED
+  INVITE_CREATED
+  INVITE_REVOKED
+  EXPENSE_CREATED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  SETTLEMENT_RECORDED
+  SETTLEMENT_VOIDED
+  COMMENT_CREATED
+  COMMENT_DELETED
+  RECEIPT_ATTACHED
+  RECEIPT_DELETED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts              Account[]
+  sessions              Session[]
+  memberships           GroupMember[]
+  groupsCreated         Group[]                     @relation("GroupCreator")
+  invitationsCreated    GroupInvitation[]           @relation("InvitationCreator")
+  invitationRedemptions GroupInvitationRedemption[]
+  expensesCreated       Expense[]                   @relation("ExpenseCreator")
+  expensesUpdated       Expense[]                   @relation("ExpenseUpdater")
+  expensesDeleted       Expense[]                   @relation("ExpenseDeleter")
+  settlementsCreated    Settlement[]                @relation("SettlementCreator")
+  comments              ExpenseComment[]
+  attachmentsUploaded   ReceiptAttachment[]
+  activities            ActivityLog[]
+  notifications         Notification[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Group {
+  id            String            @id @default(cuid())
+  name          String
+  description   String?
+  currency      String            @default("MYR") @db.Char(3)
+  timeZone      String            @default("Asia/Kuala_Lumpur")
+  status        GroupStatus       @default(ACTIVE)
+  version       Int               @default(1)
+  createdById   String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  archivedAt    DateTime?
+  createdBy     User              @relation("GroupCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  members       GroupMember[]
+  invitations   GroupInvitation[]
+  expenses      Expense[]
+  settlements   Settlement[]
+  activities    ActivityLog[]
+  notifications Notification[]
+
+  @@index([createdById])
+  @@index([status])
+}
+
+model GroupMember {
+  id                  String           @id @default(cuid())
+  groupId             String
+  userId              String
+  role                GroupRole        @default(MEMBER)
+  joinedAt            DateTime         @default(now())
+  leftAt              DateTime?
+  group               Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user                User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  expensePayments     ExpensePayer[]   @relation("PayerMember")
+  expenseShares       ExpenseSplit[]   @relation("ParticipantMember")
+  settlementsSent     Settlement[]     @relation("SettlementSender")
+  settlementsReceived Settlement[]     @relation("SettlementReceiver")
+  comments            ExpenseComment[] @relation("CommentAuthorMember")
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@index([groupId, leftAt])
+}
+
+model GroupInvitation {
+  id          String                      @id @default(cuid())
+  groupId     String
+  tokenHash   String                      @unique
+  role        GroupRole                   @default(MEMBER)
+  createdById String
+  expiresAt   DateTime
+  maxUses     Int                         @default(1)
+  useCount    Int                         @default(0)
+  revokedAt   DateTime?
+  createdAt   DateTime                    @default(now())
+  group       Group                       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdBy   User                        @relation("InvitationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  redemptions GroupInvitationRedemption[]
+
+  @@index([groupId, expiresAt])
+  @@index([createdById])
+}
+
+model GroupInvitationRedemption {
+  id           String          @id @default(cuid())
+  invitationId String
+  userId       String
+  acceptedAt   DateTime        @default(now())
+  invitation   GroupInvitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([invitationId, userId])
+  @@index([userId])
+}
+
+model Expense {
+  id             String              @id @default(cuid())
+  groupId        String
+  description    String
+  notes          String?
+  amountMinor    BigInt
+  currency       String              @db.Char(3)
+  splitMethod    SplitMethod
+  expenseDate    DateTime
+  status         ExpenseStatus       @default(ACTIVE)
+  version        Int                 @default(1)
+  idempotencyKey String?
+  createdById    String
+  updatedById    String
+  deletedById    String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+  group          Group               @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  createdBy      User                @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy      User                @relation("ExpenseUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+  deletedBy      User?               @relation("ExpenseDeleter", fields: [deletedById], references: [id], onDelete: Restrict)
+  payers         ExpensePayer[]
+  splits         ExpenseSplit[]
+  comments       ExpenseComment[]
+  attachments    ReceiptAttachment[]
+
+  @@unique([id, groupId])
+  @@unique([groupId, idempotencyKey])
+  @@index([groupId, status, expenseDate])
+  @@index([createdById])
+}
+
+model ExpensePayer {
+  id          String      @id @default(cuid())
+  expenseId   String
+  groupId     String
+  userId      String
+  amountMinor BigInt
+  expense     Expense     @relation(fields: [expenseId, groupId], references: [id, groupId], onDelete: Cascade)
+  member      GroupMember @relation("PayerMember", fields: [groupId, userId], references: [groupId, userId], onDelete: Restrict)
+
+  @@unique([expenseId, userId])
+  @@index([groupId, userId])
+}
+
+model ExpenseSplit {
+  id                    String      @id @default(cuid())
+  expenseId             String
+  groupId               String
+  userId                String
+  amountMinor           BigInt
+  percentageBasisPoints Int?
+  shareUnits            BigInt?
+  expense               Expense     @relation(fields: [expenseId, groupId], references: [id, groupId], onDelete: Cascade)
+  participant           GroupMember @relation("ParticipantMember", fields: [groupId, userId], references: [groupId, userId], onDelete: Restrict)
+
+  @@unique([expenseId, userId])
+  @@index([groupId, userId])
+}
+
+model Settlement {
+  id             String           @id @default(cuid())
+  groupId        String
+  fromUserId     String
+  toUserId       String
+  amountMinor    BigInt
+  currency       String           @db.Char(3)
+  memo           String?
+  status         SettlementStatus @default(RECORDED)
+  version        Int              @default(1)
+  idempotencyKey String?
+  settledAt      DateTime
+  createdById    String
+  createdAt      DateTime         @default(now())
+  voidedAt       DateTime?
+  group          Group            @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  fromMember     GroupMember      @relation("SettlementSender", fields: [groupId, fromUserId], references: [groupId, userId], onDelete: Restrict)
+  toMember       GroupMember      @relation("SettlementReceiver", fields: [groupId, toUserId], references: [groupId, userId], onDelete: Restrict)
+  createdBy      User             @relation("SettlementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, idempotencyKey])
+  @@index([groupId, status, settledAt])
+  @@index([fromUserId])
+  @@index([toUserId])
+}
+
+model ExpenseComment {
+  id               String      @id @default(cuid())
+  expenseId        String
+  groupId          String
+  authorId         String
+  body             String
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  deletedAt        DateTime?
+  expense          Expense     @relation(fields: [expenseId, groupId], references: [id, groupId], onDelete: Cascade)
+  author           User        @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  authorMembership GroupMember @relation("CommentAuthorMember", fields: [groupId, authorId], references: [groupId, userId], onDelete: Restrict)
+
+  @@index([expenseId, createdAt])
+  @@index([groupId, authorId])
+}
+
+model ReceiptAttachment {
+  id           String           @id @default(cuid())
+  expenseId    String
+  groupId      String
+  uploadedById String
+  storageKey   String           @unique
+  fileName     String
+  contentType  String
+  sizeBytes    Int
+  checksum     String?
+  data         Bytes?
+  status       AttachmentStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+  deletedAt    DateTime?
+  expense      Expense          @relation(fields: [expenseId, groupId], references: [id, groupId], onDelete: Cascade)
+  uploadedBy   User             @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([expenseId, status])
+  @@index([groupId])
+}
+
+model ActivityLog {
+  id         String         @id @default(cuid())
+  groupId    String
+  actorId    String?
+  action     ActivityAction
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime       @default(now())
+  group      Group          @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  actor      User?          @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([groupId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  groupId   String?
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     Group?           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([groupId])
+}
